@@ -242,6 +242,52 @@ def current_slot(now: datetime):
 def label_for(now: datetime, hour: int) -> str:
     return f"{DIAS[now.weekday()]} {now.strftime('%d-%m')} {hour:02d}:00"
 
+# ── Comando /ahora ────────────────────────────────────────────────────────────
+COMMANDS = ("/ahora", "/resumen")
+
+def tg(method: str, **params):
+    r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}", json=params,
+                      timeout=params.get("timeout", 0) + 15)
+    r.raise_for_status()
+    return r.json()["result"]
+
+def set_commands():
+    try:
+        tg("setMyCommands", commands=[{"command": "ahora", "description": "Enviar el resumen ahora"}])
+    except Exception as e:
+        log.error(f"setMyCommands error: {e}")
+
+def skip_old_updates() -> int:
+    # Ignora mensajes enviados mientras el bot estaba apagado
+    try:
+        updates = tg("getUpdates", offset=-1, timeout=0)
+        return updates[-1]["update_id"] + 1 if updates else 0
+    except Exception as e:
+        log.error(f"getUpdates error: {e}")
+        return 0
+
+def wait_for_command(seconds: int, offset: int):
+    """Espera hasta `seconds` escuchando Telegram; vuelve antes si llega /ahora."""
+    if DRY_RUN:
+        time.sleep(seconds)
+        return False, offset
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        try:
+            updates = tg("getUpdates", offset=offset, timeout=int(min(50, max(1, deadline - time.time()))))
+        except Exception as e:
+            log.error(f"getUpdates error: {e}")
+            time.sleep(10)
+            continue
+        for u in updates:
+            offset = u["update_id"] + 1
+            msg = u.get("message") or {}
+            text = (msg.get("text") or "").strip().lower()
+            if str(msg.get("chat", {}).get("id")) == str(TELEGRAM_CHAT_ID) and text.startswith(COMMANDS):
+                log.info("Comando /ahora recibido")
+                return True, offset
+    return False, offset
+
 def main():
     log.info("🚀 Middle East News Bot starting...")
     state = load_state()
@@ -257,11 +303,14 @@ def main():
     if not state["last_slot"]:
         # Primer arranque: no mandar resumen inmediato, esperar el próximo horario
         state["last_slot"] = current_slot(now)[0] or "init"
-    send_telegram(
-        "🤖 <b>Middle East News Bot activo</b>\n\n"
-        f"{len(FEEDS)} fuentes, revisión cada {POLL_INTERVAL // 60} min.\n"
-        f"Resúmenes a las {', '.join(f'{h:02d}:00' for h in DIGEST_HOURS)} (hora de Chile)."
-    )
+        send_telegram(
+            "🤖 <b>Middle East News Bot activo</b>\n\n"
+            f"{len(FEEDS)} fuentes, revisión cada {POLL_INTERVAL // 60} min.\n"
+            f"Resúmenes a las {', '.join(f'{h:02d}:00' for h in DIGEST_HOURS)} (hora de Chile).\n"
+            "Escribe /ahora para recibir el resumen en este momento."
+        )
+    set_commands()
+    offset = skip_old_updates()
 
     while True:
         poll_once(state)
@@ -271,7 +320,16 @@ def main():
             send_digest(state, label_for(now, hour))
             state["last_slot"] = slot
         save_state(state)
-        time.sleep(POLL_INTERVAL)
+
+        forced, offset = wait_for_command(POLL_INTERVAL, offset)
+        if forced:
+            send_telegram("⏳ Armando el resumen, toma uno o dos minutos…")
+            poll_once(state)
+            if state["pending"]:
+                send_digest(state, f"{DIAS[datetime.now(TZ).weekday()]} {datetime.now(TZ).strftime('%d-%m %H:%M')}")
+            else:
+                send_telegram("Sin notas nuevas desde el último resumen.")
+            save_state(state)
 
 if __name__ == "__main__":
     main()
