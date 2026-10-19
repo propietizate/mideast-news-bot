@@ -182,10 +182,14 @@ def format_item(item: dict) -> str:
     line += f"\n<a href=\"{html.escape(item['link'])}\">{e(item['source'])}</a>"
     return line
 
-def format_story(title: str, summary: str, items: list) -> str:
+def format_story(title: str, summary: str, items: list, max_links: int = 6) -> str:
     e = lambda s: html.escape(s, quote=False)
-    links = " · ".join(f"<a href=\"{html.escape(i['link'])}\">{e(i['source'])}</a>" for i in items)
-    return f"• <b>{e(title)}</b>\n{e(summary)}\n{links}"
+    by_source = {}
+    for i in items:  # un link por medio
+        by_source.setdefault(i["source"], i["link"])
+    links = [f"<a href=\"{html.escape(link)}\">{e(src)}</a>" for src, link in by_source.items()]
+    extra = f" +{len(links) - max_links}" if len(links) > max_links else ""
+    return f"• <b>{e(title)}</b>\n{e(summary)}\n{' · '.join(links[:max_links])}{extra}"
 
 def build_blocks(items: list, label: str) -> list:
     order = [name for name, _ in CATEGORIES]
@@ -202,7 +206,7 @@ def build_blocks(items: list, label: str) -> list:
     for category, text in rows:
         if category != current:
             current = category
-            blocks.append(f"\n<b>{current}</b>")
+            text = f"\n<b>{current}</b>\n\n{text}"  # el título de sección viaja con su primera noticia
         blocks.append(text)
     return blocks
 
