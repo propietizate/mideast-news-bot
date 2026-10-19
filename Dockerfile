@@ -5,6 +5,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY config.py bot.py ./
+COPY config.py ai.py bot.py ./
 
 CMD ["python", "bot.py"]

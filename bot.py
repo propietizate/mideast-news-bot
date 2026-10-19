@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 import feedparser
 import requests
 
+import ai
 from config import FEEDS, CORE, EXCLUDE, CATEGORIES
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -181,21 +182,36 @@ def format_item(item: dict) -> str:
     line += f"\n<a href=\"{html.escape(item['link'])}\">{e(item['source'])}</a>"
     return line
 
+def format_story(title: str, summary: str, items: list) -> str:
+    e = lambda s: html.escape(s, quote=False)
+    links = " · ".join(f"<a href=\"{html.escape(i['link'])}\">{e(i['source'])}</a>" for i in items)
+    return f"• <b>{e(title)}</b>\n{e(summary)}\n{links}"
+
+def build_blocks(items: list, label: str) -> list:
+    order = [name for name, _ in CATEGORIES]
+    stories = ai.curate(items)
+    if stories:
+        stories.sort(key=lambda s: order.index(s[0]))  # sort estable: mantiene la relevancia de Claude
+        blocks = [f"🗞️ <b>Resumen Medio Oriente — {label}</b>\n{len(stories)} noticias de {len(items)} notas"]
+        rows = [(s[0], format_story(*s[1:])) for s in stories]
+    else:
+        items.sort(key=lambda i: (order.index(i["category"]) if i["category"] in order else 99, -i["ts"]))
+        blocks = [f"🗞️ <b>Resumen Medio Oriente — {label}</b>\n{len(items)} notas"]
+        rows = [(i["category"], format_item(i)) for i in items]
+    current = None
+    for category, text in rows:
+        if category != current:
+            current = category
+            blocks.append(f"\n<b>{current}</b>")
+        blocks.append(text)
+    return blocks
+
 def send_digest(state: dict, label: str):
     items = state["pending"]
     if not items:
         log.info("Sin notas pendientes, no se envía resumen.")
         return
-    order = [name for name, _ in CATEGORIES]
-    items.sort(key=lambda i: (order.index(i["category"]) if i["category"] in order else 99, -i["ts"]))
-
-    blocks = [f"🗞️ <b>Resumen Medio Oriente — {label}</b>\n{len(items)} notas"]
-    current = None
-    for item in items:
-        if item["category"] != current:
-            current = item["category"]
-            blocks.append(f"\n<b>{current}</b>")
-        blocks.append(format_item(item))
+    blocks = build_blocks(items, label)
 
     # Telegram corta en 4096 caracteres: se arma por bloques
     msg = ""
